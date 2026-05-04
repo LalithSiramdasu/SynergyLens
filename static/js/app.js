@@ -53,7 +53,6 @@ const PROJECT_ASSISTANT_VIEWPORT_MARGIN = 16;
 const MAX_PREDICTION_HISTORY = 5;
 const SAFETY_NOTE_TEXT = "This is a machine-learning screening prediction. It is not biological proof and not clinical advice. Promising synergy predictions should be validated experimentally.";
 const SAMPLE_BATCH_CSV_FILENAME = "batch_prediction_sample.csv";
-const SAMPLE_BATCH_CSV_CONTENT = "NSC1,NSC2,CELLNAME\n740,750,786-0\n740,752,786-0\n750,755,786-0";
 const PROJECT_CHAT_TOPICS = {
   basics: {
     label: "Basics",
@@ -81,7 +80,7 @@ const PROJECT_CHAT_TOPICS = {
       "Why predict both directions?",
       "What thresholds are used for labels?",
       "What model was used?",
-      "How is the model selected?",
+      "What model is used?",
       "Can I trust the prediction?",
       "What should I check next after prediction?",
       "What should be validated experimentally?"
@@ -209,11 +208,11 @@ const VALIDATION_GROUPS = {
   }
 };
 const NEUTRAL_THRESHOLD = 20;
-const SCORE_DISPLAY_MIN = -500;
-const SCORE_DISPLAY_MAX = 500;
-const GAUGE_MAJOR_TICKS = [-500, -250, 0, 250, 500];
-const GAUGE_MEDIUM_TICKS = [-400, -300, -200, -100, 100, 200, 300, 400];
-const GAUGE_MINOR_TICKS = [-450, -350, -150, -50, 50, 150, 350, 450];
+const SCORE_DISPLAY_MIN = -120;
+const SCORE_DISPLAY_MAX = 80;
+const GAUGE_MAJOR_TICKS = [-120, -80, -40, 0, 40, 80];
+const GAUGE_MEDIUM_TICKS = [-100, -60, -20, 20, 60];
+const GAUGE_MINOR_TICKS = [-110, -90, -70, -50, -30, -10, 10, 30, 50, 70];
 const GAUGE_GEOMETRY = {
   cx: 130,
   cy: 122,
@@ -1866,7 +1865,7 @@ function showPredictionAssistant(prediction) {
   setText("prediction-chat-pair", `NSC ${prediction.nsc1} + NSC ${prediction.nsc2}`);
   setText("prediction-chat-cell", prediction.cellLine);
   setText("prediction-chat-score", `ComboScore ${formatScore(prediction.score, 3)} | ${semanticLabelForScore(prediction.score)}`);
-  setText("prediction-chat-model", prediction.model || "Auto-selected model");
+  setText("prediction-chat-model", prediction.model || "Single deployed model");
   setPredictionChatStatus("Ready", "neutral");
   updatePredictionAssistantButton(true);
 
@@ -2378,7 +2377,7 @@ function renderPrediction(data) {
   setText("r-cancer", "Single deployed model");
   setText("r-level", data.label);
   setText("r-cell-tile", data.cellLine);
-  setText("r-cancer-tile", data.model || "Auto-selected model");
+  setText("r-cancer-tile", data.model || "Single deployed model");
   renderPredictionStory(data);
   updatePredictionReportButton(true);
 
@@ -2563,7 +2562,7 @@ function buildPredictionReportHtml(data) {
 
     <h2>Model</h2>
     <div class="grid">
-      <div class="card"><span>Model used</span><strong>${escapeHtml(data.model || "Auto-selected cell-line model")}</strong></div>
+      <div class="card"><span>Model used</span><strong>${escapeHtml(data.model || "Single deployed model")}</strong></div>
       <div class="card"><span>Model path</span><strong>${escapeHtml(modelPath)}</strong></div>
     </div>
 
@@ -2581,8 +2580,8 @@ function buildPredictionReportHtml(data) {
     <h2>Result Story</h2>
     <p>
       SynergyLens evaluated NSC ${escapeHtml(String(data.nsc1))} with NSC ${escapeHtml(String(data.nsc2))}
-      in the ${escapeHtml(data.cellLine)} cell line using the automatically selected
-      ${escapeHtml(data.model || "cell-line")} model.
+      in the ${escapeHtml(data.cellLine)} context using the single deployed
+      ${escapeHtml(data.model || "model")}.
     </p>
     <p>
       The model predicted ${escapeHtml(forward)} for NSC ${escapeHtml(String(data.nsc1))} -&gt; NSC ${escapeHtml(String(data.nsc2))}
@@ -2655,18 +2654,10 @@ function setGauge(score, color, min, max) {
     ? displayedScore
     : state.gaugeDisplayScore;
   const duration = GAUGE_ANIMATION_DURATION;
-  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   if (state.gaugeAnimationFrame) {
     window.cancelAnimationFrame(state.gaugeAnimationFrame);
     state.gaugeAnimationFrame = null;
-  }
-
-  if (reducedMotion) {
-    updateGaugeFrame(safeTargetScore, min, max, getGaugeColor(safeTargetScore));
-    state.gaugeDisplayScore = safeTargetScore;
-    state.gaugeInitialized = true;
-    return;
   }
 
   state.gaugeInitialized = true;
@@ -2726,7 +2717,8 @@ function updateGaugeFrame(score, min, max, color) {
   }
   arc.style.strokeDashoffset = String(dashOffset);
   arc.style.stroke = gaugeColor;
-  needle.style.transform = `rotate(${needleAngle}deg)`;
+  needle.setAttribute("transform", `rotate(${formatSvgNumber(needleAngle)} ${GAUGE_GEOMETRY.cx} ${GAUGE_GEOMETRY.cy})`);
+  needle.style.transform = "";
   needle.style.color = gaugeColor;
   scoreValue.textContent = formatScore(score, 2);
   scoreValue.style.color = "#f7fbfa";
@@ -3228,16 +3220,17 @@ function renderMoleculeCards(data) {
 function normalizeMolecule(raw, title) {
   const requested = raw?.requested_nsc ?? "";
   const used = raw?.used_nsc ?? raw?.resolved_nsc ?? requested;
+  const found = Boolean(raw?.molecule_found ?? raw?.found);
   return {
     title,
-    ok: Boolean(raw && (raw.status === "success" || raw.molecule_found || raw.found)),
+    ok: Boolean(raw && found),
     requested,
     used,
     aliasUsed: Boolean(raw?.alias_used ?? raw?.used_alias),
     molecularFormula: raw?.molecular_formula || "",
     source: raw?.source || "",
     svg: raw?.structure_svg || raw?.svg || "",
-    error: raw?.error || "Molecule structure was not found."
+    error: raw?.message || raw?.error || "Molecule structure was not found."
   };
 }
 
@@ -3551,10 +3544,24 @@ function downloadBatchResults() {
 }
 
 function downloadSampleBatchCsv() {
-  const blob = new Blob([SAMPLE_BATCH_CSV_CONTENT], { type: "text/csv;charset=utf-8" });
+  const blob = new Blob([buildSampleBatchCsv()], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   triggerDownload(url, SAMPLE_BATCH_CSV_FILENAME);
   URL.revokeObjectURL(url);
+}
+
+function buildSampleBatchCsv() {
+  const ids = state.drugs.map((drug) => drug.id).filter(Boolean);
+  while (ids.length < 3) {
+    ids.push(String(1001 + ids.length));
+  }
+  const cellLine = state.cellLines[0] || "General";
+  return [
+    "NSC1,NSC2,CELLNAME",
+    `${csvEscape(ids[0])},${csvEscape(ids[1])},${csvEscape(cellLine)}`,
+    `${csvEscape(ids[1])},${csvEscape(ids[2])},${csvEscape(cellLine)}`,
+    `${csvEscape(ids[2])},${csvEscape(ids[0])},${csvEscape(cellLine)}`
+  ].join("\n");
 }
 
 function triggerDownload(url, filename) {

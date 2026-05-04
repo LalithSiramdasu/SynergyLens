@@ -1,4 +1,5 @@
 from flask import Flask, jsonify, render_template
+from werkzeug.exceptions import HTTPException
 
 from backend.config import ensure_directories
 from backend.routes.api_routes import api_bp
@@ -16,25 +17,25 @@ def create_app():
     def index():
         return render_template("index.html")
 
-    @app.errorhandler(404)
-    def not_found(error):
+    @app.errorhandler(HTTPException)
+    def handle_http_exception(error):
+        message = (
+            "Uploaded files must be 10 MB or smaller."
+            if error.code == 413
+            else error.description
+        )
         return jsonify({
             "status": "error",
-            "message": "The requested route was not found.",
-        }), 404
+            "message": message,
+            "error": message,
+        }), error.code
 
-    @app.errorhandler(413)
-    def file_too_large(error):
-        return jsonify({
-            "status": "error",
-            "message": "Uploaded files must be 10 MB or smaller.",
-        }), 413
-
-    @app.errorhandler(500)
+    @app.errorhandler(Exception)
     def internal_error(error):
         return jsonify({
             "status": "error",
             "message": "An internal server error occurred. Check the Flask logs for details.",
+            "error": "An internal server error occurred. Check the Flask logs for details.",
         }), 500
 
     return app

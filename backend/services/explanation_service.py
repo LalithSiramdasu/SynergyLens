@@ -41,7 +41,8 @@ def explain(payload):
         return _fallback_response(
             payload,
             prediction=prediction,
-            message=f"Feature explanation is not available for this model yet. SHAP fallback reason: {exc}",
+            message="Feature explanation is not available for this model yet.",
+            detail=str(exc),
         )
 
     return {
@@ -55,13 +56,13 @@ def explain(payload):
         "top_negative_contributors": contributors["negative"],
         "plain_english_explanation": (
             "SHAP values estimate which configured features pushed the single-model "
-            "prediction upward or downward for this input row."
+            "prediction upward toward synergy or downward toward antagonism for this input row."
         ),
         "explanation": "SHAP explanation generated from the deployed single model.",
     }
 
 
-def _fallback_response(payload, prediction=None, message="Feature explanation is not available for this model yet."):
+def _fallback_response(payload, prediction=None, message="Feature explanation is not available for this model yet.", detail=""):
     try:
         nsc1, nsc2, cellname = prediction_service.normalize_prediction_input(payload)
     except Exception:
@@ -73,6 +74,13 @@ def _fallback_response(payload, prediction=None, message="Feature explanation is
         score = float(prediction.get("final_predicted_COMBOSCORE", 0.0))
         input_payload = prediction.get("input", input_payload)
 
+    explanation = (
+        f"{message} Positive contributors would be interpreted as pushing the score upward toward synergy; "
+        "negative contributors would be interpreted as pushing the score downward toward antagonism."
+    )
+    if detail:
+        explanation = f"{explanation} Technical note: {detail[:180]}"
+
     return {
         "status": "success",
         "input": input_payload,
@@ -82,9 +90,9 @@ def _fallback_response(payload, prediction=None, message="Feature explanation is
         "base_value": None,
         "top_positive_contributors": [],
         "top_negative_contributors": [],
-        "plain_english_explanation": message,
-        "explanation": message,
-        "explanation_summary": message,
+        "plain_english_explanation": explanation,
+        "explanation": explanation,
+        "explanation_summary": explanation,
         "suggestion": "Add SHAP-compatible model assets later if feature attribution is required.",
     }
 
@@ -123,6 +131,11 @@ def _rank_contributors(feature_frame, impacts):
             "readable_feature": str(feature_name),
             "feature_value": _clean_value(row[feature_name]),
             "impact": numeric_impact,
+            "direction": (
+                "pushes score upward toward synergy"
+                if numeric_impact >= 0
+                else "pushes score downward toward antagonism"
+            ),
         })
 
     positive = sorted((item for item in rows if item["impact"] > 0), key=lambda item: item["impact"], reverse=True)[:7]

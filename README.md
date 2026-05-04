@@ -83,6 +83,12 @@ The extracted UI depends on:
 - `GET /api/model-performance-summary`
 - `GET /api/system-summary`
 
+Additional compatibility routes are also available for old UI/tooling checks:
+
+- `GET /api/model-info/<cell_line>`
+- `GET /api/molecule/<nsc>`
+- `POST /api/molecules`
+
 ## Current Placeholders
 
 Molecule rendering, model performance metrics, and SHAP explanations are graceful placeholders until matching new project assets are configured. The prediction backend is connected to the organized single-model asset bundle.

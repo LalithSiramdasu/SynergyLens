@@ -197,7 +197,7 @@
             <article class="panel info-panel reveal reveal-delay-1">
               <div class="mini-grid">
                 <div class="mini-card"><span class="mini-label">Select</span><strong>Drug Pair</strong><p>Fast autocomplete over the project drug library.</p></div>
-                <div class="mini-card"><span class="mini-label">Context</span><strong>Cell Model</strong><p>Attach a cell line; model selection is automatic.</p></div>
+                <div class="mini-card"><span class="mini-label">Context</span><strong>Cell Features</strong><p>Attach a cell line/context; the deployed model uses those features.</p></div>
                 <div class="mini-card"><span class="mini-label">Interpret</span><strong>Score Band</strong><p>Read synergy, neutral, or antagonistic behavior quickly.</p></div>
               </div>
             </article>
@@ -246,7 +246,7 @@
                     <span class="axis-moderate-synergy"><strong>+20 to +80</strong><em>Moderate synergy</em></span>
                     <span class="axis-strong-synergy"><strong>&ge; +80</strong><em>Strong synergy</em></span>
                   </div>
-                  <p class="gauge-note">Gauge display scale: -500 to +500 ComboScore, clamped for visualization.</p>
+                  <p class="gauge-note">Gauge display scale: -120 to +80 ComboScore, clamped for visualization.</p>
                 </div>
                 <div class="pair-banner">
                   <div><span class="pair-label">Drug Pair</span><div class="pair-names"><strong id="r-drug1">Drug 1</strong><span>+</span><strong id="r-drug2">Drug 2</strong></div></div>
@@ -537,7 +537,7 @@
           <div class="model-performance-layout">
             <article class="performance-card">
               <h3>Model Types Used</h3>
-              <p>This deployment uses one selected model for the new project.</p>
+              <p>This deployment uses one single model for the new project.</p>
               <div id="model-type-counts" class="model-count-list">
                 <span class="model-count-empty">Loading model counts...</span>
               </div>

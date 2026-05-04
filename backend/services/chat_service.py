@@ -34,8 +34,9 @@ def _project_answer(question):
     if "model" in lower:
         text = (
             "This clean backend uses one deployed model at models/model.pkl. "
-            "It does not select among cell-line-specific models. The model receives a "
-            "feature DataFrame ordered by data/feature_columns.json."
+            "It uses the same deployed model for every valid context, with no per-context "
+            "model registry. The model receives a feature DataFrame ordered by "
+            "data/feature_columns.json."
         )
     elif "dataset" in lower or "data" in lower:
         text = (
