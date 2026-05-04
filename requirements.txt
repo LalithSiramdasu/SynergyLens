@@ -1,0 +1,9 @@
+Flask
+pandas
+numpy
+scikit-learn
+joblib
+xgboost
+
+# Optional: install shap to enable SHAP explanations.
+# shap
