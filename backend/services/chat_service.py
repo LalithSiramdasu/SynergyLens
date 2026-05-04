@@ -2,10 +2,10 @@ from backend.services import summary_service
 
 
 PROJECT_SUGGESTIONS = [
-    "Where do I place the new dataset?",
-    "Where do I place model.pkl?",
-    "What feature file is required?",
-    "What does the prediction label mean?",
+    "What is ComboScore?",
+    "How does prediction work?",
+    "What are 263 and 526 features?",
+    "Can I use this clinically?",
 ]
 
 PREDICTION_SUGGESTIONS = [
@@ -33,22 +33,29 @@ def _project_answer(question):
 
     if "model" in lower:
         text = (
-            "This clean backend uses one deployed model at models/model.pkl. "
-            "It uses the same deployed model for every valid context, with no per-context "
-            "model registry. The model receives a feature DataFrame ordered by "
-            "data/feature_columns.json."
+            "SynergyLens currently uses the single deployed model at models/model.pkl when that is the configured asset. "
+            "It also supports the old Drug-Synergy-Prediction registry if final_step6 model files and "
+            "results/step6_final_model_registry.csv are added. The response always reports model_used, model_path, "
+            "model_selection_mode, and feature_mode_used so the UI does not guess."
+        )
+    elif "263" in lower or "526" in lower:
+        text = (
+            "The old NCI ALMANAC deployment used 263 prepared features per drug and built a 526-column pair vector "
+            "with D1_ and D2_ prefixes. This repo keeps that path as optional compatibility when old assets are present. "
+            "The current single model uses the feature order in data/feature_columns.json."
         )
     elif "dataset" in lower or "data" in lower:
         text = (
-            "The organized data bundle lives in data/: drug_name_id_map.csv, "
-            "drug_fingerprints_lookup.csv, cell_line_features_lookup.csv, "
-            "depmap_features_lookup.csv, and feature_columns.json. The frontend still "
-            "sends NSC1, NSC2, and CELLNAME for compatibility."
+            "The project is compatible with NCI ALMANAC-style NSC drug-pair inputs. Current organized files live in data/: "
+            "drug_name_id_map.csv, drug_fingerprints_lookup.csv, cell_line_features_lookup.csv, depmap_features_lookup.csv, "
+            "and feature_columns.json. If data/model_matrix.csv is provided, exact observed ComboScore rows are shown only "
+            "as dataset_reference_COMBOSCORE debugging metadata, never as the model prediction."
         )
     elif "feature" in lower:
         text = (
             "Feature construction is isolated in backend/services/prediction_service.py. "
-            "Edit build_feature_vector() when your new dataset needs custom feature engineering."
+            "Current SynergyLens builds the configured single-model feature vector; old assets can build the 526-column "
+            "D1_/D2_ vector. In both modes, columns are ordered exactly by the saved feature-column file."
         )
     elif "batch" in lower or "csv" in lower:
         text = "Batch uploads need a CSV with NSC1, NSC2, and CELLNAME columns. Aliases from the UI are normalized before prediction."
@@ -57,10 +64,10 @@ def _project_answer(question):
     elif "safety" in lower or "clinical" in lower or "trust" in lower:
         text = "Predictions are screening estimates, not biological proof or clinical advice. Important results should be validated experimentally."
     elif "comboscore" in lower or "synergy" in lower or "antagon" in lower:
-        text = "Positive scores are labeled synergistic, scores near zero are neutral, and negative scores are antagonistic using thresholds in prediction_service.py."
+        text = "ComboScore labels use transparent thresholds: score >= 20 is synergistic, score <= -20 is antagonistic, and values between -20 and 20 are neutral."
     else:
         text = (
-            "SynergyLens is now wired to a clean Flask backend for a new single-model project. "
+            "SynergyLens is wired to a clean Flask backend for drug synergy screening with NSC1, NSC2, and CELLNAME inputs. "
             f"Configured assets: {', '.join(system.get('asset_messages', []))}."
         )
 
@@ -82,14 +89,25 @@ def _prediction_answer(question, prediction, explanation):
     nsc2 = input_payload.get("NSC2", "")
     cellname = input_payload.get("CELLNAME", "General")
 
+    mode = prediction.get("model_selection_mode") or "single_model"
+    feature_mode = prediction.get("feature_mode_used") or "configured feature"
     text = (
         f"For {nsc1} + {nsc2} in {cellname}, the latest model output is {score} "
-        f"and the current label is {label}. The backend used {model}, the single deployed model."
+        f"and the current label is {label}. The backend used {model} in {mode} mode with {feature_mode} features."
     )
 
     lower = question.lower()
     if "direction" in lower or "both" in lower:
-        text += " The UI expects two directional scores; this backend averages them for compatibility. If no reverse feature row exists, both scores may be identical."
+        text += " SynergyLens predicts NSC1 to NSC2 and NSC2 to NSC1, then averages the two ComboScores. If a model is order-independent or reverse features cannot be built, both values may be identical and the response says so."
+    elif "reference" in lower or "actual" in lower or "error" in lower:
+        if prediction.get("dataset_reference_available"):
+            text += (
+                f" A dataset reference ComboScore of {prediction.get('dataset_reference_COMBOSCORE')} was found for debugging. "
+                f"The signed error is {prediction.get('signed_error')} and the absolute error is {prediction.get('absolute_error')}. "
+                "That reference value is not used as the model prediction."
+            )
+        else:
+            text += " No exact dataset reference row was available, so no observed ComboScore error metadata is shown."
     elif "feature" in lower or "xai" in lower or "caused" in lower:
         has_explanation = bool(explanation and explanation.get("features"))
         text += " Explain AI contributors are available only when SHAP and compatible model assets are configured." if not has_explanation else " The latest explanation payload includes ranked feature contributors."

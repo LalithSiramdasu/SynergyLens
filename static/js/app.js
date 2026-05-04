@@ -146,8 +146,9 @@ const PROJECT_CHAT_TOPICS = {
 };
 const PREDICTION_FLOW_MESSAGES = [
   "Validating inputs",
+  "Loading feature assets",
   "Building model feature vector",
-  "Loading deployed model",
+  "Loading selected model",
   "Running NSC1 \u2192 NSC2 prediction",
   "Running NSC2 \u2192 NSC1 prediction",
   "Averaging ComboScore",
@@ -2356,8 +2357,16 @@ function normalizePredictionResponse(data, payload) {
     cellLine: input.CELLNAME ?? data.CELLNAME ?? payload.CELLNAME,
     model: data.model_used || data.model_name || "",
     modelPath: data.model_path || "",
+    modelSelectionMode: data.model_selection_mode || "",
+    featureMode: data.feature_mode_used || "",
+    featureCount: data.feature_count,
     forward: data.prediction_NSC1_to_NSC2,
     reverse: data.prediction_NSC2_to_NSC1,
+    datasetReferenceAvailable: Boolean(data.dataset_reference_available),
+    datasetReferenceComboScore: data.dataset_reference_COMBOSCORE,
+    absoluteError: data.absolute_error,
+    signedError: data.signed_error,
+    datasetReferenceSource: data.dataset_reference_source || "",
     explanation: data.explanation || "",
     suggestion: data.suggestion || "",
     gaugeMin: SCORE_DISPLAY_MIN,
@@ -2403,6 +2412,8 @@ function buildPredictionStoryHtml(data) {
   const reverse = formatScore(data.reverse, 3);
   const finalScore = formatScore(data.score, 3);
   const scoreMeaning = scoreMeaningForScore(data.score);
+  const metadataHtml = predictionMetadataHtml(data);
+  const referenceHtml = datasetReferenceHtml(data);
 
   return `
     <p>
@@ -2417,6 +2428,8 @@ function buildPredictionStoryHtml(data) {
       <div><span>Final averaged ComboScore</span><strong>${escapeHtml(finalScore)}</strong></div>
       <div><span>Final label</span><strong>${escapeHtml(storyLabel)}</strong></div>
     </div>
+    ${metadataHtml}
+    ${referenceHtml}
     <p>
       The backend returns two directional scores for UI compatibility. If the deployed model is
       order-independent, both values may be identical; otherwise, their average gives the final ComboScore.
@@ -2425,6 +2438,40 @@ function buildPredictionStoryHtml(data) {
       and negative ComboScore suggests antagonism.
     </p>
     <p class="story-safety">${escapeHtml(SAFETY_NOTE_TEXT)}</p>
+  `;
+}
+
+function predictionMetadataHtml(data) {
+  const fields = [
+    ["Model mode", data.modelSelectionMode],
+    ["Feature mode", data.featureMode],
+    ["Feature count", data.featureCount]
+  ].filter(([, value]) => value !== undefined && value !== null && String(value) !== "");
+
+  if (!fields.length) {
+    return "";
+  }
+
+  return `
+    <div class="story-score-grid story-score-grid--metadata">
+      ${fields.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>`).join("")}
+    </div>
+  `;
+}
+
+function datasetReferenceHtml(data) {
+  if (!data.datasetReferenceAvailable) {
+    return "";
+  }
+
+  return `
+    <p class="story-reference">
+      Dataset reference found for debugging only:
+      observed ComboScore <strong>${escapeHtml(formatMaybeNumber(data.datasetReferenceComboScore))}</strong>,
+      signed error <strong>${escapeHtml(formatMaybeNumber(data.signedError))}</strong>,
+      absolute error <strong>${escapeHtml(formatMaybeNumber(data.absoluteError))}</strong>.
+      The displayed prediction remains the model output, not the dataset value.
+    </p>
   `;
 }
 
@@ -2460,6 +2507,18 @@ function buildPredictionReportHtml(data) {
   const reverse = formatScore(data.reverse, 3);
   const modelPath = data.modelPath || "Not provided";
   const generatedAtText = generatedAt.toLocaleString();
+  const featureMode = data.featureMode || "configured feature vector";
+  const modelMode = data.modelSelectionMode || "configured model";
+  const referenceReportHtml = data.datasetReferenceAvailable
+    ? `
+    <h2>Dataset Reference Debugging</h2>
+    <p>
+      Observed dataset ComboScore: <strong>${escapeHtml(formatMaybeNumber(data.datasetReferenceComboScore))}</strong>.
+      Signed error: <strong>${escapeHtml(formatMaybeNumber(data.signedError))}</strong>.
+      Absolute error: <strong>${escapeHtml(formatMaybeNumber(data.absoluteError))}</strong>.
+      This reference is debugging metadata only and was not used as the model prediction.
+    </p>`
+    : "";
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -2564,6 +2623,8 @@ function buildPredictionReportHtml(data) {
     <div class="grid">
       <div class="card"><span>Model used</span><strong>${escapeHtml(data.model || "Single deployed model")}</strong></div>
       <div class="card"><span>Model path</span><strong>${escapeHtml(modelPath)}</strong></div>
+      <div class="card"><span>Model mode</span><strong>${escapeHtml(modelMode)}</strong></div>
+      <div class="card"><span>Feature mode</span><strong>${escapeHtml(featureMode)}</strong></div>
     </div>
 
     <h2>Predictions</h2>
@@ -2589,6 +2650,7 @@ function buildPredictionReportHtml(data) {
       The final averaged ComboScore is ${escapeHtml(finalScore)}, labeled ${escapeHtml(storyLabel)}.
       ${escapeHtml(scoreMeaning)}
     </p>
+    ${referenceReportHtml}
 
     <div class="safety">
       <strong>Safety note</strong>
@@ -2654,10 +2716,18 @@ function setGauge(score, color, min, max) {
     ? displayedScore
     : state.gaugeDisplayScore;
   const duration = GAUGE_ANIMATION_DURATION;
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   if (state.gaugeAnimationFrame) {
     window.cancelAnimationFrame(state.gaugeAnimationFrame);
     state.gaugeAnimationFrame = null;
+  }
+
+  if (reducedMotion) {
+    updateGaugeFrame(safeTargetScore, min, max, getGaugeColor(safeTargetScore));
+    state.gaugeDisplayScore = safeTargetScore;
+    state.gaugeInitialized = true;
+    return;
   }
 
   state.gaugeInitialized = true;

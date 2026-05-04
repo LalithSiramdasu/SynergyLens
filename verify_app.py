@@ -41,6 +41,15 @@ PREDICTION_KEYS = (
     "prediction_label",
     "explanation",
     "feature_count",
+    "model_selection_mode",
+    "feature_mode_used",
+    "model_type",
+    "dataset_reference_checked",
+    "dataset_reference_available",
+    "dataset_reference_COMBOSCORE",
+    "absolute_error",
+    "signed_error",
+    "debug",
 )
 
 
@@ -69,6 +78,16 @@ class Verifier:
         body = response.get_data(as_text=True)
         ok = response.status_code == 200 and "<html" in body.lower()
         self._print("OK" if ok else "FAIL", "GET", "/", response, "HTML loaded" if ok else body[:180])
+        if ok:
+            self.passed += 1
+        else:
+            self.failures += 1
+
+    def get_static(self, path, expected_content_type):
+        response = self.client.get(path)
+        content_type = response.headers.get("Content-Type", "")
+        ok = response.status_code == 200 and expected_content_type in content_type
+        self._print("OK" if ok else "FAIL", "GET", path, response, content_type or _response_preview(response))
         if ok:
             self.passed += 1
         else:
@@ -141,6 +160,8 @@ def main():
             verifier = Verifier(client)
 
             verifier.home()
+            verifier.get_static("/static/css/app.css", "text/css")
+            verifier.get_static("/static/js/app.js", "javascript")
             health = verifier.get(
                 "/api/health",
                 ("status", "available_drugs", "available_cell_lines", "feature_column_count", "model_count", "errors"),
@@ -157,6 +178,20 @@ def main():
 
             prediction = verifier.post_json("/api/predict", payload, PREDICTION_KEYS, allow_asset_error=True)
             prediction_context = _prediction_context(payload, prediction)
+            alias_payload = {
+                "Drug1": payload["NSC1"],
+                "Drug2": payload["NSC2"],
+                "cellLine": payload["CELLNAME"],
+            }
+            alias_prediction = verifier.post_json(
+                "/api/predict",
+                alias_payload,
+                PREDICTION_KEYS,
+                allow_asset_error=True,
+                label="/api/predict alias payload",
+            )
+            if prediction.get("status") == "success" and alias_prediction.get("status") == "success":
+                _assert_same_prediction(verifier, prediction, alias_prediction)
 
             explanation = verifier.post_json(
                 "/api/explain",
@@ -260,6 +295,8 @@ def _prediction_context(payload, prediction):
         "NSC2": payload["NSC2"],
         "CELLNAME": payload["CELLNAME"],
         "model_used": "SingleModel",
+        "model_selection_mode": "single_model",
+        "feature_mode_used": "organized_lookup",
         "final_predicted_COMBOSCORE": None,
         "label": "unavailable",
         "prediction_label": "unavailable",
@@ -268,11 +305,27 @@ def _prediction_context(payload, prediction):
 
 def _batch_csv(payload):
     return "\n".join([
-        "NSC1,NSC2,CELLNAME",
+        "Drug1,Drug2,cellLine",
         f"{payload['NSC1']},{payload['NSC2']},{payload['CELLNAME']}",
         f"VERIFY_UNKNOWN_DRUG,{payload['NSC2']},{payload['CELLNAME']}",
         "",
     ])
+
+
+def _assert_same_prediction(verifier, prediction, alias_prediction):
+    original = prediction.get("final_predicted_COMBOSCORE")
+    alias = alias_prediction.get("final_predicted_COMBOSCORE")
+    try:
+        ok = abs(float(original) - float(alias)) < 1e-9
+    except (TypeError, ValueError):
+        ok = False
+
+    if ok:
+        verifier.passed += 1
+        print("[OK] ALIAS /api/predict -> matching model prediction for Drug1/Drug2/cellLine aliases")
+    else:
+        verifier.failures += 1
+        print("[FAIL] ALIAS /api/predict -> alias payload changed prediction result")
 
 
 def _drug_id(item):

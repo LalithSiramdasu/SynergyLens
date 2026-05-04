@@ -69,7 +69,32 @@ def cell_lines():
 
 @api_bp.get("/model-info/<path:cell_line>")
 def model_info(cell_line):
-    exists = model_service.model_exists()
+    try:
+        specific = model_service.get_cell_line_model_info(cell_line)
+    except ModelAssetError as exc:
+        return error_response(exc, 503)
+    if specific:
+        exists = specific["model_file_exists"]
+        return jsonify({
+            "status": "success",
+            "cell_line": specific["cell_line"],
+            "context": specific["cell_line"],
+            "safe_cell_line": specific["safe_cell_line"],
+            "model_used": specific["model_used"],
+            "model_name": specific["model_name"],
+            "model_path": specific["model_path"],
+            "model_file_exists": exists,
+            "model_count": model_service.model_count(),
+            "model_selection_mode": specific["model_selection_mode"],
+            "feature_mode": specific["feature_mode"],
+            "message": (
+                "This cell line uses its configured cell-line-specific model."
+                if exists
+                else "A registry entry exists, but the model file is missing."
+            ),
+        })
+
+    exists = model_service.single_model_exists()
     return jsonify({
         "status": "success",
         "cell_line": cell_line,
@@ -78,7 +103,9 @@ def model_info(cell_line):
         "model_name": MODEL_DISPLAY_NAME,
         "model_path": MODEL_DISPLAY_PATH,
         "model_file_exists": exists,
-        "model_count": 1 if exists else 0,
+        "model_count": model_service.model_count(),
+        "model_selection_mode": "single_model",
+        "feature_mode": "organized_lookup",
         "message": (
             "This new SynergyLens project uses one deployed model for every valid context."
             if exists

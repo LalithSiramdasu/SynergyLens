@@ -1767,6 +1767,18 @@ input::placeholder {
   font-size: 1rem;
 }
 
+.story-score-grid--metadata {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.story-reference {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
 .story-safety {
   padding-top: 12px;
   border-top: 1px solid var(--border);

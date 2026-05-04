@@ -30,8 +30,9 @@ def explain(payload):
             prediction["NSC1"],
             prediction["NSC2"],
             prediction["CELLNAME"],
+            prediction.get("feature_mode_used", "organized_lookup"),
         )
-        model = model_service.load_model()
+        model = model_service.select_model_for_cell_line(prediction["CELLNAME"])["model"]
         explainer = shap.Explainer(model, feature_frame)
         shap_result = explainer(feature_frame)
         impacts = _extract_impacts(shap_result)

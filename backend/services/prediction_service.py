@@ -1,6 +1,5 @@
 import pandas as pd
 
-from backend.config import MODEL_DISPLAY_NAME, MODEL_DISPLAY_PATH
 from backend.services import data_service, model_service
 from backend.services.data_service import DataAssetError
 
@@ -15,89 +14,121 @@ class FeatureBuildError(Exception):
 
 SYNERGY_THRESHOLD = 20.0
 ANTAGONISM_THRESHOLD = -20.0
+FIELD_ALIASES = {
+    "NSC1": ("NSC1", "drug1_id", "Drug1", "drug1", "nsc1"),
+    "NSC2": ("NSC2", "drug2_id", "Drug2", "drug2", "nsc2"),
+    "CELLNAME": ("CELLNAME", "cell_line", "cellLine", "cell", "cellname", "context"),
+}
 
 
 def normalize_prediction_input(payload):
-    payload = payload or {}
-    nsc1 = payload.get("NSC1") or payload.get("drug1_id") or payload.get("drug1") or payload.get("nsc1")
-    nsc2 = payload.get("NSC2") or payload.get("drug2_id") or payload.get("drug2") or payload.get("nsc2")
-    cellname = payload.get("CELLNAME") or payload.get("cell_line") or payload.get("cellname") or payload.get("context")
+    if not isinstance(payload, dict):
+        raise PredictionInputError("Request body must be a JSON object.")
 
-    nsc1 = str(nsc1 or "").strip()
-    nsc2 = str(nsc2 or "").strip()
-    cellname = str(cellname or "").strip() or "General"
+    nsc1 = _required_field(payload, "NSC1")
+    nsc2 = _required_field(payload, "NSC2")
+    cellname = _required_field(payload, "CELLNAME")
 
-    missing = []
-    if not nsc1:
-        missing.append("NSC1")
-    if not nsc2:
-        missing.append("NSC2")
-    if not cellname:
-        missing.append("CELLNAME")
-    if missing:
-        raise PredictionInputError(f"Missing required prediction field(s): {', '.join(missing)}.")
-
-    return nsc1, nsc2, cellname
+    return _clean_identifier(nsc1), _clean_identifier(nsc2), str(cellname).strip()
 
 
-def build_feature_vector(nsc1, nsc2, cellname):
-    """Build the one-row model input DataFrame for the deployed single model.
+def _required_field(payload, field_name):
+    for candidate in FIELD_ALIASES[field_name]:
+        value = payload.get(candidate)
+        if value is not None and str(value).strip() != "":
+            return value
+    raise PredictionInputError(f"{field_name} is required.")
 
-    Adaptation point for the new dataset:
-    replace the organized lookup builder with your real feature engineering if
-    model inputs are not derived from the files currently stored in data/.
-    Keep the returned DataFrame columns in the exact order from
-    data/feature_columns.json.
+
+def _clean_identifier(value):
+    text = str(value or "").strip()
+    if text.endswith(".0") and text[:-2].isdigit():
+        return text[:-2]
+    return text
+
+
+def build_feature_vector(nsc1, nsc2, cellname, feature_mode="organized_lookup"):
+    """Build the one-row model input DataFrame.
+
+    Current SynergyLens assets use a single deployed model with a 1,600-column
+    feature order from data/feature_columns.json. If old NCI ALMANAC Step 6
+    assets are added later, feature_mode="old_d1_d2" builds the old 526-column
+    D1_/D2_ vector from data/drug_features.csv and
+    data/step6_final_model_feature_columns.json.
     """
+    return build_feature_bundle(nsc1, nsc2, cellname, feature_mode)["frame"]
+
+
+def build_feature_bundle(nsc1, nsc2, cellname, feature_mode="organized_lookup"):
     try:
-        feature_columns = data_service.get_feature_columns()
+        feature_columns = data_service.get_feature_columns(feature_mode)
     except DataAssetError as exc:
         raise FeatureBuildError(str(exc)) from exc
 
     if not feature_columns:
+        if feature_mode == "old_d1_d2":
+            raise FeatureBuildError(
+                "Old 526-feature mode is not configured. Add data/step6_final_model_feature_columns.json."
+            )
         raise FeatureBuildError(
             "Feature engineering is not configured. Add data/feature_columns.json "
             "as a JSON list containing the exact model feature order."
         )
 
     try:
-        frame = data_service.build_feature_frame(nsc1, nsc2, cellname, feature_columns)
+        frame = data_service.build_feature_frame(nsc1, nsc2, cellname, feature_columns, feature_mode)
     except DataAssetError as exc:
         raise FeatureBuildError(str(exc)) from exc
 
     if not isinstance(frame, pd.DataFrame) or frame.empty:
         raise FeatureBuildError("Feature engineering returned no model input rows.")
 
-    return frame
+    return {
+        "frame": frame,
+        "feature_columns": feature_columns,
+        "feature_count": int(frame.shape[1]),
+        "feature_mode": feature_mode,
+    }
 
 
 def predict_single(payload):
     nsc1, nsc2, cellname = normalize_prediction_input(payload)
+    model_selection = model_service.select_model_for_cell_line(cellname)
+    feature_mode = model_selection["feature_mode"]
 
-    forward_features = build_feature_vector(nsc1, nsc2, cellname)
-    forward_prediction = model_service.predict(forward_features)
+    forward_bundle = build_feature_bundle(nsc1, nsc2, cellname, feature_mode)
+    forward_prediction = model_service.predict_with_model(model_selection["model"], forward_bundle["frame"])
 
     reverse_note = ""
+    reverse_feature_available = True
     try:
-        reverse_features = build_feature_vector(nsc2, nsc1, cellname)
-        reverse_prediction = model_service.predict(reverse_features)
+        reverse_bundle = build_feature_bundle(nsc2, nsc1, cellname, feature_mode)
+        reverse_prediction = model_service.predict_with_model(model_selection["model"], reverse_bundle["frame"])
     except FeatureBuildError:
+        reverse_bundle = forward_bundle
         reverse_prediction = forward_prediction
+        reverse_feature_available = False
         reverse_note = (
-            " Reverse feature row was not found, so the backend treated the deployed model "
-            "as order-independent for UI compatibility."
+            " Reverse feature row was not found, so the backend treated this model as "
+            "order-independent for UI compatibility."
         )
 
     final_prediction = float((forward_prediction + reverse_prediction) / 2.0)
     label = label_for_score(final_prediction)
     category = category_for_score(final_prediction)
+    reference = _reference_debug_fields(nsc1, nsc2, cellname, final_prediction)
 
     explanation = (
-        f"The deployed single model predicted a final score of {final_prediction:.3f} "
+        f"The deployed model predicted a final ComboScore of {final_prediction:.3f} "
         f"for {nsc1} + {nsc2} in {cellname}. "
         f"Using the configured thresholds, this is labeled {label}."
         f"{reverse_note}"
     )
+    if reference["dataset_reference_available"]:
+        explanation += (
+            " A matching dataset ComboScore was found for debugging only; it was not used "
+            "as the prediction."
+        )
 
     return {
         "status": "success",
@@ -109,9 +140,14 @@ def predict_single(payload):
         "NSC1": nsc1,
         "NSC2": nsc2,
         "CELLNAME": cellname,
-        "model_used": MODEL_DISPLAY_NAME,
-        "model_name": MODEL_DISPLAY_NAME,
-        "model_path": MODEL_DISPLAY_PATH,
+        "model_used": model_selection["model_used"],
+        "model_name": model_selection["model_name"],
+        "model_type": model_selection["model_type"],
+        "model_path": model_selection["model_path"],
+        "selected_model_path": model_selection["selected_model_path"],
+        "model_selection_mode": model_selection["model_selection_mode"],
+        "feature_mode_used": feature_mode,
+        "feature_count": forward_bundle["feature_count"],
         "prediction_1_to_2": forward_prediction,
         "prediction_2_to_1": reverse_prediction,
         "prediction_NSC1_to_NSC2": forward_prediction,
@@ -126,7 +162,41 @@ def predict_single(payload):
         "prediction_category": category,
         "explanation": explanation,
         "suggestion": "Use this as a screening signal and validate important findings experimentally.",
-        "feature_count": int(forward_features.shape[1]),
+        "reverse_feature_available": reverse_feature_available,
+        "calibration_applied": False,
+        "calibrated_predicted_COMBOSCORE": None,
+        **reference,
+        "debug": {
+            "feature_count": forward_bundle["feature_count"],
+            "feature_mode_used": feature_mode,
+            "model_type": model_selection["model_type"],
+            "model_used": model_selection["model_used"],
+            "selected_model_path": model_selection["selected_model_path"],
+            "model_selection_mode": model_selection["model_selection_mode"],
+            "forward_prediction": forward_prediction,
+            "reverse_prediction": reverse_prediction,
+            "reverse_feature_available": reverse_feature_available,
+            "dataset_reference_available": reference["dataset_reference_available"],
+            "dataset_reference_source": reference["dataset_reference_source"],
+        },
+    }
+
+
+def _reference_debug_fields(nsc1, nsc2, cellname, final_prediction):
+    reference = data_service.lookup_dataset_reference(nsc1, nsc2, cellname)
+    if reference["dataset_reference_available"]:
+        actual = reference["dataset_reference_COMBOSCORE"]
+        signed_error = float(final_prediction - actual)
+        return {
+            **reference,
+            "absolute_error": abs(signed_error),
+            "signed_error": signed_error,
+        }
+
+    return {
+        **reference,
+        "absolute_error": None,
+        "signed_error": None,
     }
 
 
